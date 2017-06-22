@@ -303,7 +303,7 @@ class pg_engine(object):
 		self.pg_conn.pgsql_cur.execute(sql_drop)
 		self.pg_conn.pgsql_cur.execute(sql_create)
 		self.pg_conn.pgsql_cur.execute(sql_path)
-	
+
 	def store_table(self, table_name):
 		"""
 			The method saves the table name along with the primary key definition in the table t_replica_tables.
@@ -311,13 +311,28 @@ class pg_engine(object):
 			If the table is without primary key is not stored. 
 			A table without primary key is copied and the indices are create like any other table. 
 			However the replica doesn't work for the tables without primary key.
-			
+
 			:param table_name: the table name to store in the table  t_replica_tables
 		"""
-		table_data=self.table_metadata[table_name]
+		table_data = self.table_metadata[table_name]
 		for index in table_data["indices"]:
-			if index["index_name"]=="PRIMARY":
-				sql_insert=""" 
+			if index["index_name"] == "PRIMARY":
+				sql_count = """
+					SELECT 
+						count(i_id_source)
+					FROM 
+						sch_chameleon.t_replica_tables 
+					WHERE 
+						i_id_source=%s 
+						and v_table_name=%s 
+						and v_schema_name=%s
+						;
+							"""
+				self.pg_conn.pgsql_cur.execute(sql_count, (self.i_id_source, table_name, self.dest_schema,))
+				source_data = self.pg_conn.pgsql_cur.fetchone()
+				cnt_source = source_data[0]
+				if cnt_source <= 0:
+					sql_insert = """ 
 					INSERT INTO sch_chameleon.t_replica_tables 
 						(
 							i_id_source,
@@ -331,14 +346,25 @@ class pg_engine(object):
 							%s,
 							%s,
 							ARRAY[%s]
-						)
-					ON CONFLICT (i_id_source,v_table_name,v_schema_name)
-						DO UPDATE 
-							SET v_table_pkey=EXCLUDED.v_table_pkey
-										;
+						)			;
 								"""
-				self.pg_conn.pgsql_cur.execute(sql_insert, (self.i_id_source, table_name, self.dest_schema, index["index_columns"].strip()))	
-	
+					self.pg_conn.pgsql_cur.execute(sql_insert, (
+					self.i_id_source, table_name, self.dest_schema, index["index_columns"].strip()))
+				else:
+					sql_update = """ 
+										UPDATE sch_chameleon.t_replica_tables
+										 SET 
+
+												v_table_pkey=ARRAY[%s]
+										 WHERE 	 
+										 	  i_id_source=%s
+										 	  and v_table_name=%s 
+											  and v_schema_name=%s 
+										 		;
+													"""
+					self.pg_conn.pgsql_cur.execute(sql_update, (
+					index["index_columns"].strip(), self.i_id_source, table_name, self.dest_schema))
+
 	def unregister_table(self, table_name):
 		"""
 			This method is used when a table have the primary key dropped on MySQL. 
